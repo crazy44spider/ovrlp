@@ -121,6 +121,15 @@ fieldset:disabled {
   opacity: 0.65;
 }
 
+.discover-button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.retry-button {
+  margin-top: 0.65rem;
+}
+
 fieldset:disabled .discover-button, fieldset:disabled .mode-option {
   cursor: wait;
 }

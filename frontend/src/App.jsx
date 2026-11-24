@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
 
 const modes = [
@@ -13,14 +13,23 @@ async function getApi(path, params) {
   const data = await response.json().catch(() => null)
 
   if (!response.ok || !data) {
-    throw new Error(
+    const error = new Error(
       typeof data?.detail === 'string'
         ? data.detail
         : 'Could not get a response from OvrLP. Check that the backend is running.',
     )
+    error.retryAfter = response.status === 503 ? response.headers.get('Retry-After') : null
+    throw error
   }
 
   return data
+}
+
+function retryDelay(header) {
+  if (!header) return 0
+  const value = header.trim()
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()
+  return Number.isFinite(delay) ? Math.max(0, delay) : 0
 }
 
 function Artwork({ variant = 0 }) {
@@ -65,15 +74,50 @@ function App() {
   const [error, setError] = useState('')
   const [reference, setReference] = useState(null)
   const [results, setResults] = useState(null)
+  const [retryParams, setRetryParams] = useState(null)
+  const [retryAt, setRetryAt] = useState(null)
+
+  useEffect(() => {
+    if (retryAt === null) return
+
+    function finishCooldown() {
+      if (Date.now() >= retryAt) setRetryAt(null)
+    }
+
+    const timer = window.setInterval(finishCooldown, 1000)
+    return () => window.clearInterval(timer)
+  }, [retryAt])
+
+  function showFailure(stage, failure) {
+    setError(`${stage}: ${failure.message}`)
+    const delay = retryDelay(failure.retryAfter)
+    if (delay > 0) setRetryAt(Date.now() + delay)
+  }
+
+  async function runDiscovery(params) {
+    setError('')
+    setStatus('Finding compatible songs…')
+    setRetryParams(null)
+    try {
+      setResults(await getApi('discover', params))
+    } catch (failure) {
+      showFailure('Discovery failed', failure)
+      setRetryParams(params)
+    } finally {
+      setStatus('')
+    }
+  }
 
   async function handleSearch(event) {
     event.preventDefault()
+    if (status || retryAt !== null) return
     const fields = new FormData(event.currentTarget)
     const title = fields.get('title').trim()
     const artist = fields.get('artist').trim()
     const mode = fields.get('mode')
 
     setError('')
+    setRetryParams(null)
     setReference(null)
     setResults(null)
 
@@ -82,26 +126,26 @@ function App() {
       return
     }
 
+    let song
+    setStatus('Looking up your song…')
     try {
-      setStatus('Looking up your song…')
-      const song = await getApi('lookup', { title, artist })
-      setReference(song)
-
-      if (song.bpm == null || song.key == null) {
-        throw new Error('This song is missing a BPM or musical key. Try another song.')
-      }
-
-      setStatus('Finding compatible songs…')
-      const params = { bpm: song.bpm, key: song.key, mode }
-      if (song.id != null) {
-        params.reference_id = song.id
-      }
-      setResults(await getApi('discover', params))
+      song = await getApi('lookup', { title, artist })
     } catch (failure) {
-      setError(failure.message)
-    } finally {
+      showFailure('Song lookup failed', failure)
       setStatus('')
+      return
     }
+
+    setReference(song)
+    if (song.bpm == null || song.key == null) {
+      setError('This song is missing a BPM or musical key. Try another song.')
+      setStatus('')
+      return
+    }
+
+    const params = { bpm: song.bpm, key: song.key, mode }
+    if (song.id != null) params.reference_id = song.id
+    await runDiscovery(params)
   }
 
   return (
@@ -129,7 +173,7 @@ function App() {
               Artist
               <input name="artist" placeholder="e.g. Daft Punk" required />
             </label>
-            <button type="submit" className="discover-button">Discover</button>
+            <button type="submit" className="discover-button" disabled={retryAt !== null}>Discover</button>
           </fieldset>
           <fieldset className="mode-picker" disabled={Boolean(status)}>
             <legend>Matching mode</legend>
@@ -155,6 +199,21 @@ function App() {
           )}
         </div>
         {error && <p className="error" role="alert">{error}</p>}
+        {retryAt !== null && (
+          <p className="status" role="status">
+            Try again after {new Date(retryAt).toLocaleTimeString()}.
+          </p>
+        )}
+        {retryParams && (
+          <button
+            type="button"
+            className="discover-button retry-button"
+            disabled={retryAt !== null}
+            onClick={() => runDiscovery(retryParams)}
+          >
+            Retry discovery
+          </button>
+        )}
 
         {reference && (
           <section className="reference" aria-label="Reference song">
