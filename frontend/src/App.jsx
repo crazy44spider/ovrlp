@@ -18,6 +18,7 @@ async function getApi(path, params) {
         ? data.detail
         : 'Could not get a response from OvrLP. Check that the backend is running.',
     )
+    error.status = response.status
     error.retryAfter = response.status === 503 ? response.headers.get('Retry-After') : null
     throw error
   }
@@ -30,6 +31,12 @@ function retryDelay(header) {
   const value = header.trim()
   const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now()
   return Number.isFinite(delay) ? Math.max(0, delay) : 0
+}
+
+function discoveryParams(song, mode) {
+  const params = { bpm: song.bpm, key: song.key, mode }
+  if (song.id != null) params.reference_id = song.id
+  return params
 }
 
 function Artwork({ variant = 0 }) {
@@ -70,9 +77,11 @@ function MatchCard({ song, index }) {
 }
 
 function App() {
+  const [mode, setMode] = useState('2')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [reference, setReference] = useState(null)
+  const [manualTrack, setManualTrack] = useState(null)
   const [results, setResults] = useState(null)
   const [retryParams, setRetryParams] = useState(null)
   const [retryAt, setRetryAt] = useState(null)
@@ -98,11 +107,12 @@ function App() {
     setError('')
     setStatus('Finding compatible songs…')
     setRetryParams(null)
+    setResults(null)
     try {
       setResults(await getApi('discover', params))
     } catch (failure) {
       showFailure('Discovery failed', failure)
-      setRetryParams(params)
+      if (failure.status !== 422) setRetryParams(params)
     } finally {
       setStatus('')
     }
@@ -114,11 +124,10 @@ function App() {
     const fields = new FormData(event.currentTarget)
     const title = fields.get('title').trim()
     const artist = fields.get('artist').trim()
-    const mode = fields.get('mode')
-
     setError('')
     setRetryParams(null)
     setReference(null)
+    setManualTrack(null)
     setResults(null)
 
     if (!title || !artist) {
@@ -131,6 +140,7 @@ function App() {
     try {
       song = await getApi('lookup', { title, artist })
     } catch (failure) {
+      if (failure.status === 404) setManualTrack({ title, artist })
       showFailure('Song lookup failed', failure)
       setStatus('')
       return
@@ -138,14 +148,29 @@ function App() {
 
     setReference(song)
     if (song.bpm == null || song.key == null) {
-      setError('This song is missing a BPM or musical key. Try another song.')
+      setManualTrack(song)
+      setError('This song is missing BPM or key information.')
       setStatus('')
       return
     }
 
-    const params = { bpm: song.bpm, key: song.key, mode }
-    if (song.id != null) params.reference_id = song.id
-    await runDiscovery(params)
+    await runDiscovery(discoveryParams(song, mode))
+  }
+
+  async function handleManualSearch(event) {
+    event.preventDefault()
+    if (status || retryAt !== null) return
+    const fields = new FormData(event.currentTarget)
+    const bpm = Number(fields.get('bpm'))
+    const key = fields.get('key').trim()
+    if (!Number.isFinite(bpm) || bpm < 1 || bpm > 300 || !key) {
+      setError('Enter a BPM between 1 and 300 and a musical key.')
+      return
+    }
+
+    const song = { ...manualTrack, bpm, key }
+    setReference(song)
+    await runDiscovery(discoveryParams(song, mode))
   }
 
   return (
@@ -180,7 +205,7 @@ function App() {
             <div className="mode-options">
               {modes.map(([value, label, description]) => (
                 <label className="mode-option" key={value} title={description}>
-                  <input type="radio" name="mode" value={value} defaultChecked={value === '2'} />
+                  <input type="radio" name="mode" value={value} checked={mode === value} onChange={() => setMode(value)} />
                   <span>{label}</span>
                 </label>
               ))}
@@ -213,6 +238,23 @@ function App() {
           >
             Retry discovery
           </button>
+        )}
+
+        {manualTrack && (
+          <form className="manual-search" onSubmit={handleManualSearch}>
+            <fieldset className="search-inputs" disabled={Boolean(status)}>
+              <legend>Enter BPM and key manually</legend>
+              <label>
+                BPM
+                <input name="bpm" type="number" min="1" max="300" step="any" defaultValue={manualTrack.bpm ?? ''} required />
+              </label>
+              <label>
+                Musical key
+                <input name="key" placeholder="e.g. Am or Bb" defaultValue={manualTrack.key ?? ''} required />
+              </label>
+              <button type="submit" className="discover-button" disabled={retryAt !== null}>Find matches</button>
+            </fieldset>
+          </form>
         )}
 
         {reference && (
