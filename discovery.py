@@ -171,7 +171,7 @@ def discovery_plan(reference_bpm, reference_key, mode):
     return sorted(b for b in bpms if 1 <= b <= 300), keys
 
 
-def discover(session, reference_bpm, reference_key, mode="2", limit=50):
+def discover(session, reference_bpm, reference_key, mode="2", limit=1000):
     """Find songs by intersecting bounded tempo and key result lists by ID."""
     bpms, candidate_keys = discovery_plan(reference_bpm, reference_key, mode)
     bpm_results = {}
@@ -341,7 +341,7 @@ def main():
         matches = [s for s in matches if s["id"] != reference["id"]]
         print(f"\nFound {len(matches)} matches in overlapping results "
               f"({tempo_count} tempo candidates, {key_count} key candidates).\n")
-        for s in matches[:30]:
+        for s in matches[:100]:
             direction = "speed up" if s["adjustment"] > 0 else "slow down"
             tempo_note = (f"{direction} {abs(s['adjustment']):.1f}%"
                           if abs(s["adjustment"]) > 0.05 else "no tempo change")
