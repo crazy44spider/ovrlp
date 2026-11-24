@@ -12,6 +12,16 @@ CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "getsongbpm"
 # Keeping API results for a week to avoid unnecessary repeated requests.
 CACHE_TTL = 7 * 24 * 60 * 60
 
+
+class RateLimitError(RuntimeError):
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+        super().__init__(
+            "GetSongBPM returned 429. Stop requests and respect Retry-After: "
+            + (retry_after or "not specified")
+        )
+
+
 # GetSongBPM uses pitch class (C=0) and mode (minor=0, major=1).
 ROOTS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 PITCH = {name: i for i, name in enumerate(ROOTS)}
@@ -114,8 +124,7 @@ def api_get(session, endpoint, params):
             pass
     response = session.get(f"{BASE_URL}/{endpoint}/", params=params, timeout=15)
     if response.status_code == 429:
-        raise RuntimeError("GetSongBPM returned 429. Stop requests and respect Retry-After: "
-                           + str(response.headers.get("Retry-After", "not specified")))
+        raise RateLimitError(response.headers.get("Retry-After"))
     response.raise_for_status()
     data = response.json()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
